@@ -16,23 +16,23 @@ The goal was to build a system that lets a user ask questions in natural languag
 
 **Solution**
 
-The application implements a RAG pipeline:
+1.The application implements a RAG pipeline:
 
-PDF text extraction with PyPDF
+2.PDF text extraction with PyPDF
 
-Page-aware text chunking with overlap
+3.Page-aware text chunking with overlap
 
-Sentence-transformer embeddings
+4.Sentence-transformer embeddings
 
-FAISS vector similarity search
+5.FAISS vector similarity search
 
-Retrieval of the most relevant document chunks
+6.Retrieval of the most relevant document chunks
 
-Context-grounded generation with a local instruction-tuned language model
+7.Context-grounded generation with a local instruction-tuned language model
 
-Source-page attribution
+8.Source-page attribution
 
-Gradio user interface
+9.Gradio user interface
 
 **Architecture**
 
@@ -104,61 +104,61 @@ The original page number is stored with every chunk. After retrieval, the applic
 
 The working prototype successfully:
 
-extracts text from a PDF;
+🔵extracts text from a PDF;
 
-creates 38 chunks from the demonstration document;
+🔵creates 38 chunks from the demonstration document;
 
-generates 384-dimensional embeddings;
+🔵generates 384-dimensional embeddings;
 
-indexes all chunks in FAISS;
+🔵indexes all chunks in FAISS;
 
-retrieves relevant passages for natural-language questions;
+🔵retrieves relevant passages for natural-language questions;
 
-generates context-grounded answers with a local model;
+🔵generates context-grounded answers with a local model;
 
-returns source pages;
+🔵returns source pages;
 
-exposes the pipeline through a Gradio interface.
+🔵exposes the pipeline through a Gradio interface.
 
 **Technology stack**
 
-Python
+🔵Python
 
-PyPDF
+🔵PyPDF
 
-Sentence Transformers
+🔵Sentence Transformers
 
-FAISS
+🔵FAISS
 
-NumPy
+🔵NumPy
 
-Hugging Face Transformers
+🔵Hugging Face Transformers
 
-PyTorch
+🔵PyTorch
 
-Gradio
+🔵Gradio
 
-Google Colab for development
+🔵Google Colab for development
 
 **Why this project matters**
 
 This project demonstrates practical ML engineering beyond simply calling an LLM API. It combines:
 
-NLP preprocessing
+🔵NLP preprocessing
 
-embeddings
+🔵embeddings
 
-vector search
+🔵vector search
 
-information retrieval
+🔵information retrieval
 
-prompt design
+🔵prompt design
 
-local model inference
+🔵local model inference
 
-application integration
+🔵application integration
 
-source attribution
+🔵source attribution
 
 It also provides a foundation for document search systems in research, education, engineering, legal, finance, and enterprise knowledge management.
 
@@ -166,33 +166,33 @@ It also provides a foundation for document search systems in research, education
 
 The current prototype is intentionally lightweight; I made it so.
 
-The local language model is small and has limited generation quality compared with larger models.
+🔵The local language model is small and has limited generation quality compared with larger models.
 
-Scanned/image-only PDFs require OCR, which is not yet implemented.
+🔵Scanned/image-only PDFs require OCR, which is not yet implemented.
 
-Retrieval quality has not yet been evaluated systematically against a labelled question set.
+🔵Retrieval quality has not yet been evaluated systematically against a labelled question set.
 
-The prototype is not yet optimized for concurrent users.
+🔵The prototype is not yet optimized for concurrent users.
 
-Colab is being used for development rather than permanent hosting.
+🔵Colab is being used for development rather than permanent hosting.
 
 Next improvements
 
-Add retrieval evaluation using a labelled question set.
+•Add retrieval evaluation using a labelled question set.
 
-Add OCR support for scanned PDFs.
+•Add OCR support for scanned PDFs.
 
-Add document-level metadata and better chunking.
+•Add document-level metadata and better chunking.
 
-Compare retrieval strategies and embedding models.
+•Compare retrieval strategies and embedding models.
 
-Add answer-confidence and citation validation.
+•Add answer-confidence and citation validation.
 
-Deploy the application to a persistent hosting platform.
+•Deploy the application to a persistent hosting platform.
 
-Add multi-document collections.
+•Add multi-document collections.
 
-Add authentication and usage controls if deployed publicly.
+•Add authentication and usage controls if deployed publicly.
 
 **Portfolio positioning**
 
@@ -206,8 +206,8 @@ Machine Learning, NLP, RAG, semantic search, embeddings, vector databases, local
 
 **Links**
 
-Live demo: Add after deployment
+🟢Live demo: Add after deployment
 
-Source code: Add GitHub repository
+🟢Source code: Add GitHub repository
 
-Demo video: Add after recording
+🟢Demo video: Add after recording
