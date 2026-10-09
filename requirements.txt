@@ -1,7 +1,7 @@
-gradio
+streamlit
 numpy
 faiss-cpu
 pypdf
 sentence-transformers
-transformers 
-torch 
+transformers
+torch
