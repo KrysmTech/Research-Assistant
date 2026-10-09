@@ -1,105 +1,99 @@
-
-import gradio as gr
+import streamlit as st
 import numpy as np
 import faiss
+import torch
 
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
-# ============================================================
-# 1. LOAD MODELS
-# ============================================================
+# =====================================================
+# PAGE CONFIGURATION
+# =====================================================
 
-print("Loading embedding model...")
-
-embedding_model = SentenceTransformer(
-    "sentence-transformers/all-MiniLM-L6-v2"
+st.set_page_config(
+    page_title="Engineering Research Assistant",
+    page_icon="📚",
+    layout="wide"
 )
 
-print("Loading language model...")
+st.title("📚 Engineering Research Assistant")
 
-model_name = "HuggingFaceTB/SmolLM2-135M-Instruct"
-
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-model = AutoModelForCausalLM.from_pretrained(
-    model_name
+st.write(
+    "Upload a PDF document, ask questions in natural "
+    "language, and explore answers grounded in the "
+    "document with source-page references."
 )
 
-print("Models loaded successfully.")
+
+# =====================================================
+# LOAD MODELS
+# Models are cached to avoid reloading on every rerun.
+# =====================================================
+
+@st.cache_resource
+def load_embedding_model():
+    return SentenceTransformer(
+        "sentence-transformers/all-MiniLM-L6-v2"
+    )
 
 
-# ============================================================
-# 2. GLOBAL DOCUMENT STATE
-# ============================================================
+@st.cache_resource
+def load_language_model():
+    model_name = "HuggingFaceTB/SmolLM2-135M-Instruct"
 
-current_chunks = []
-current_index = None
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name
+    )
+
+    model.eval()
+
+    return tokenizer, model
 
 
-# ============================================================
-# 3. EXTRACT TEXT FROM PDF
-# ============================================================
+# =====================================================
+# EXTRACT TEXT FROM PDF
+# =====================================================
 
-def process_pdf(pdf_path):
-
-    reader = PdfReader(pdf_path)
-
+def extract_pages(pdf_file):
+    reader = PdfReader(pdf_file)
     pages = []
 
     for page_number, page in enumerate(
-        reader.pages,
-        start=1
+        reader.pages, start=1
     ):
-
         text = page.extract_text()
 
-        if text:
-            pages.append(
-                {
-                    "page": page_number,
-                    "text": text
-                }
-            )
+        if text and text.strip():
+            pages.append({
+                "page": page_number,
+                "text": text.strip()
+            })
 
     return pages
 
 
-# ============================================================
-# 4. CREATE TEXT CHUNKS
-# ============================================================
+# =====================================================
+# SPLIT TEXT INTO CHUNKS
+# =====================================================
 
-def create_chunks(
-    pages,
-    chunk_size=700,
-    overlap=100
-):
-
+def create_chunks(pages, chunk_size=700, overlap=100):
     chunks = []
 
     for page in pages:
-
         text = page["text"]
-
         start = 0
 
         while start < len(text):
+            end = min(start + chunk_size, len(text))
 
-            end = min(
-                start + chunk_size,
-                len(text)
-            )
-
-            chunk_text = text[start:end]
-
-            chunks.append(
-                {
-                    "text": chunk_text,
-                    "page": page["page"]
-                }
-            )
+            chunks.append({
+                "text": text[start:end],
+                "page": page["page"]
+            })
 
             if end == len(text):
                 break
@@ -109,371 +103,255 @@ def create_chunks(
     return chunks
 
 
-# ============================================================
-# 5. BUILD FAISS VECTOR INDEX
-# ============================================================
+# =====================================================
+# CREATE FAISS SEARCH INDEX
+# =====================================================
 
-def build_index(chunks):
-
-    texts = [
-        chunk["text"]
-        for chunk in chunks
-    ]
+def build_index(chunks, embedding_model):
+    texts = [chunk["text"] for chunk in chunks]
 
     embeddings = embedding_model.encode(
         texts,
-        batch_size=16,
+        batch_size=8,
         show_progress_bar=False
     )
 
-    embedding_array = np.array(
-        embeddings
-    ).astype("float32")
-
-    dimension = embedding_array.shape[1]
+    embeddings = np.asarray(
+        embeddings, dtype=np.float32
+    )
 
     index = faiss.IndexFlatL2(
-        dimension
+        embeddings.shape[1]
     )
 
-    index.add(
-        embedding_array
-    )
+    index.add(embeddings)
 
     return index
 
 
-# ============================================================
-# 6. LOAD AND PROCESS DOCUMENT
-# ============================================================
+# =====================================================
+# ANSWER QUESTIONS USING RETRIEVAL-AUGMENTED
+# GENERATION (RAG)
+# =====================================================
 
-def load_document(pdf_path):
+def answer_question(
+    question,
+    chunks,
+    index,
+    embedding_model,
+    tokenizer,
+    model
+):
+    if not question.strip():
+        return "Please enter a question.", []
 
-    global current_chunks
-    global current_index
+    question_embedding = embedding_model.encode(
+        [question]
+    )
 
-    if pdf_path is None:
+    question_embedding = np.asarray(
+        question_embedding, dtype=np.float32
+    )
 
-        return "Please upload a PDF first."
+    top_k = min(3, len(chunks))
 
-    try:
+    distances, indices = index.search(
+        question_embedding, top_k
+    )
 
-        pages = process_pdf(pdf_path)
+    context_parts = []
+    source_pages = []
 
-        if not pages:
+    for chunk_index in indices[0]:
+        if chunk_index < 0:
+            continue
 
-            return (
-                "No readable text was found "
-                "in this PDF."
-            )
+        chunk = chunks[chunk_index]
 
-        current_chunks = create_chunks(
-            pages
+        context_parts.append(
+            f"Page {chunk['page']}:\n{chunk['text']}"
         )
 
-        current_index = build_index(
-            current_chunks
-        )
+        if chunk["page"] not in source_pages:
+            source_pages.append(chunk["page"])
 
-        return (
-            "Document processed successfully.\n\n"
-            f"Pages: {len(pages)}\n"
-            f"Chunks: {len(current_chunks)}"
-        )
+    context = "\n\n".join(context_parts)
 
-    except Exception as error:
+    prompt = f"""You are a document research assistant.
 
-        return (
-            "Error processing document:\n"
-            f"{str(error)}"
-        )
-
-
-# ============================================================
-# 7. ANSWER QUESTIONS
-# ============================================================
-
-def answer_question(question):
-
-    global current_chunks
-    global current_index
-
-    if current_index is None:
-
-        return (
-            "Please upload and process "
-            "a PDF first.",
-            ""
-        )
-
-    if not question or not question.strip():
-
-        return (
-            "Please enter a question.",
-            ""
-        )
-
-    try:
-
-        # ----------------------------------------------------
-        # Convert question into embedding
-        # ----------------------------------------------------
-
-        question_embedding = (
-            embedding_model.encode(
-                [question]
-            )
-        )
-
-        question_embedding = np.array(
-            question_embedding
-        ).astype("float32")
-
-
-        # ----------------------------------------------------
-        # Retrieve most relevant chunks
-        # ----------------------------------------------------
-
-        top_k = min(
-            3,
-            len(current_chunks)
-        )
-
-        distances, indices = (
-            current_index.search(
-                question_embedding,
-                top_k
-            )
-        )
-
-
-        # ----------------------------------------------------
-        # Build context
-        # ----------------------------------------------------
-
-        context_parts = []
-
-        for i in indices[0]:
-
-            context_parts.append(
-                f"Page {current_chunks[i]['page']}:\n"
-                f"{current_chunks[i]['text']}"
-            )
-
-        context = "\n\n".join(
-            context_parts
-        )
-
-
-        # ----------------------------------------------------
-        # Build prompt
-        # ----------------------------------------------------
-
-        prompt = f"""
-You are an engineering research assistant.
-
-Answer the question using ONLY the information
+Answer the question using only the information
 provided in the context.
 
 If the answer cannot be found in the context,
-say:
+say: "I could not find this information in the
+provided document."
 
-"I could not find this information in the provided document."
-
-Do not invent information.
-Do not use outside knowledge.
+Do not invent facts.
 
 Context:
-
 {context}
 
 Question:
-
 {question}
 
-Answer:
-"""
+Answer:"""
 
+    inputs = tokenizer(
+        prompt,
+        return_tensors="pt",
+        truncation=True,
+        max_length=2048
+    )
 
-        # ----------------------------------------------------
-        # Generate answer
-        # ----------------------------------------------------
-
-        inputs = tokenizer(
-            prompt,
-            return_tensors="pt"
-        )
-
+    with torch.inference_mode():
         outputs = model.generate(
             **inputs,
             max_new_tokens=150,
-            temperature=0.2,
-            do_sample=True
+            do_sample=False,
+            pad_token_id=tokenizer.eos_token_id
         )
 
-        response = tokenizer.decode(
-            outputs[0],
-            skip_special_tokens=True
+    # Decode only the newly generated answer tokens.
+    input_length = inputs["input_ids"].shape[1]
+
+    new_tokens = outputs[0][input_length:]
+
+    answer = tokenizer.decode(
+        new_tokens,
+        skip_special_tokens=True
+    ).strip()
+
+    if not answer:
+        answer = (
+            "The model did not generate an answer. "
+            "Try asking the question differently."
         )
 
-
-        # ----------------------------------------------------
-        # Remove prompt from generated response
-        # ----------------------------------------------------
-
-        if "Answer:" in response:
-
-            response = response.split(
-                "Answer:",
-                1
-            )[1].strip()
+    return answer, source_pages
 
 
-        # ----------------------------------------------------
-        # Get source pages
-        # ----------------------------------------------------
+# =====================================================
+# DOCUMENT UPLOAD
+# =====================================================
 
-        sources = []
+uploaded_file = st.file_uploader(
+    "Upload a PDF document",
+    type=["pdf"]
+)
 
-        for i in indices[0]:
+if uploaded_file is not None:
+    if st.button("Process PDF", type="primary"):
 
-            page = current_chunks[i]["page"]
+        try:
+            with st.spinner(
+                "Loading models and processing your PDF..."
+            ):
+                embedding_model = load_embedding_model()
 
-            if page not in sources:
+                tokenizer, model = load_language_model()
 
-                sources.append(page)
+                pages = extract_pages(uploaded_file)
+
+                if not pages:
+                    st.error(
+                        "No readable text was found. "
+                        "The PDF may be scanned or image-only."
+                    )
+                    st.stop()
+
+                chunks = create_chunks(pages)
+
+                if not chunks:
+                    st.error(
+                        "No text chunks could be created."
+                    )
+                    st.stop()
+
+                index = build_index(
+                    chunks, embedding_model
+                )
+
+                # Save the processed document for this session.
+                st.session_state["chunks"] = chunks
+                st.session_state["index"] = index
+                st.session_state["filename"] = (
+                    uploaded_file.name
+                )
+
+            st.success(
+                f"Processed {uploaded_file.name} successfully!"
+            )
+
+            st.write(f"Pages with text: {len(pages)}")
+            st.write(f"Text chunks: {len(chunks)}")
+
+        except Exception as error:
+            st.error(
+                f"Could not process the PDF: {error}"
+            )
 
 
-        source_text = ", ".join(
-            f"Page {page}"
-            for page in sources
-        )
+# =====================================================
+# QUESTION-ANSWERING INTERFACE
+# =====================================================
 
-        return response, source_text
+if "chunks" in st.session_state:
+    st.divider()
 
+    st.subheader("Ask questions about your document")
 
-    except Exception as error:
-
-        return (
-            f"Error answering question:\n{str(error)}",
-            ""
-        )
-
-
-# ============================================================
-# 8. GRADIO USER INTERFACE
-# ============================================================
-
-with gr.Blocks() as app:
-
-    gr.Markdown(
-        "# Engineering Research Assistant"
+    st.caption(
+        f"Current document: {st.session_state['filename']}"
     )
 
-    gr.Markdown(
-        "Upload an engineering research paper "
-        "and ask questions about it using "
-        "Retrieval-Augmented Generation (RAG)."
-    )
-
-
-    # --------------------------------------------------------
-    # PDF Upload
-    # --------------------------------------------------------
-
-    pdf_upload = gr.File(
-        label="Upload Engineering Research Paper",
-        file_types=[".pdf"],
-        type="filepath"
-    )
-
-
-    # --------------------------------------------------------
-    # Process Button
-    # --------------------------------------------------------
-
-    process_button = gr.Button(
-        "Process PDF"
-    )
-
-
-    # --------------------------------------------------------
-    # Document Status
-    # --------------------------------------------------------
-
-    status_box = gr.Textbox(
-        label="Document Status",
-        lines=3
-    )
-
-
-    # --------------------------------------------------------
-    # Question
-    # --------------------------------------------------------
-
-    question_box = gr.Textbox(
-        label="Ask a Question",
+    question = st.text_input(
+        "Your question",
         placeholder=(
-            "e.g. What is the compressive strength?"
-        ),
-        lines=2
+            "What are the main findings of this document?"
+        )
     )
 
+    if st.button("Get Answer"):
+        try:
+            with st.spinner(
+                "Searching the document and generating an answer..."
+            ):
+                embedding_model = load_embedding_model()
+                tokenizer, model = load_language_model()
 
-    # --------------------------------------------------------
-    # Ask Button
-    # --------------------------------------------------------
+                answer, source_pages = answer_question(
+                    question,
+                    st.session_state["chunks"],
+                    st.session_state["index"],
+                    embedding_model,
+                    tokenizer,
+                    model
+                )
 
-    ask_button = gr.Button(
-        "Ask"
-    )
+            st.subheader("Answer")
+            st.write(answer)
 
+            st.subheader("Source pages")
 
-    # --------------------------------------------------------
-    # Answer
-    # --------------------------------------------------------
+            if source_pages:
+                st.write(
+                    ", ".join(
+                        f"Page {page}"
+                        for page in source_pages
+                    )
+                )
+            else:
+                st.write("No source pages available.")
 
-    answer_box = gr.Textbox(
-        label="Answer",
-        lines=6
-    )
-
-
-    # --------------------------------------------------------
-    # Sources
-    # --------------------------------------------------------
-
-    sources_box = gr.Textbox(
-        label="Source Pages",
-        lines=2
-    )
-
-
-    # --------------------------------------------------------
-    # Button Actions
-    # --------------------------------------------------------
-
-    process_button.click(
-        fn=load_document,
-        inputs=pdf_upload,
-        outputs=status_box
-    )
+        except Exception as error:
+            st.error(
+                f"Could not answer the question: {error}"
+            )
 
 
-    ask_button.click(
-        fn=answer_question,
-        inputs=question_box,
-        outputs=[
-            answer_box,
-            sources_box
-        ]
-    )
+st.divider()
 
-
-# ============================================================
-# 9. LAUNCH APPLICATION
-# ============================================================
-
-if __name__ == "__main__":
-
-    app.launch()
+st.caption(
+    "Built with Python, Streamlit, Sentence Transformers, "
+    "FAISS, PyTorch and SmolLM2."
+)
